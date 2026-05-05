@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KYC Verification</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, -apple-system, sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem; }
+
+  h1 { font-size: 1.5rem; font-weight: 700; color: #111; margin-bottom: .25rem; }
+  .subtitle { font-size: .9rem; color: #6b7280; margin-bottom: 2rem; }
+
+  /* Stepper */
+  .stepper { display: flex; align-items: center; gap: 0; margin-bottom: 2rem; width: 100%; max-width: 640px; }
+  .step { display: flex; flex-direction: column; align-items: center; flex: 1; position: relative; }
+  .step:not(:last-child)::after { content: ''; position: absolute; top: 16px; left: 50%; width: 100%; height: 2px; background: #e5e7eb; z-index: 0; }
+  .step.done:not(:last-child)::after { background: #2563eb; }
+  .step-circle { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: .8rem; font-weight: 700; z-index: 1; border: 2px solid #e5e7eb; background: #fff; color: #9ca3af; }
+  .step.active .step-circle { border-color: #2563eb; color: #2563eb; background: #eff6ff; }
+  .step.done .step-circle { border-color: #2563eb; background: #2563eb; color: #fff; }
+  .step-label { font-size: .72rem; color: #9ca3af; margin-top: .35rem; text-align: center; }
+  .step.active .step-label, .step.done .step-label { color: #2563eb; }
+
+  /* Card */
+  .card { background: #fff; border-radius: 12px; padding: 2rem; box-shadow: 0 1px 6px rgba(0,0,0,.08); width: 100%; max-width: 640px; }
+
+  .step-title { font-size: 1.1rem; font-weight: 700; margin-bottom: .25rem; }
+  .step-desc { font-size: .85rem; color: #6b7280; margin-bottom: 1.5rem; }
+
+  /* Upload zone */
+  .upload-zone { border: 2px dashed #d1d5db; border-radius: 8px; padding: 2rem; text-align: center; cursor: pointer; transition: border-color .2s, background .2s; }
+  .upload-zone:hover, .upload-zone.drag { border-color: #2563eb; background: #eff6ff; }
+  .upload-zone input { display: none; }
+  .upload-icon { font-size: 2rem; margin-bottom: .5rem; }
+  .upload-text { font-size: .9rem; color: #374151; }
+  .upload-hint { font-size: .78rem; color: #9ca3af; margin-top: .25rem; }
+  .file-selected { font-size: .85rem; color: #2563eb; margin-top: .75rem; font-weight: 600; }
+
+  button { padding: .65rem 1.5rem; border: none; border-radius: 6px; font-size: .9rem; font-weight: 600; cursor: pointer; transition: background .15s; }
+  .btn-primary { background: #2563eb; color: #fff; }
+  .btn-primary:hover { background: #1d4ed8; }
+  .btn-primary:disabled { background: #93c5fd; cursor: not-allowed; }
+  .btn-secondary { background: #f3f4f6; color: #374151; }
+  .btn-secondary:hover { background: #e5e7eb; }
+  .btn-row { display: flex; gap: .75rem; margin-top: 1.5rem; justify-content: flex-end; }
+
+  /* Spinner */
+  .spinner { display: inline-block; width: 18px; height: 18px; border: 2px solid #fff; border-top-color: transparent; border-radius: 50%; animation: spin .6s linear infinite; vertical-align: middle; margin-right: .4rem; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Result */
+  .result-header { display: flex; align-items: center; gap: .75rem; margin-bottom: 1.25rem; }
+  .doc-badge { background: #eff6ff; color: #1d4ed8; border-radius: 6px; padding: .3rem .75rem; font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  .conf-bar-wrap { flex: 1; }
+  .conf-label { font-size: .75rem; color: #6b7280; margin-bottom: .2rem; }
+  .conf-bar { height: 6px; background: #e5e7eb; border-radius: 3px; overflow: hidden; }
+  .conf-fill { height: 100%; border-radius: 3px; background: #2563eb; transition: width .4s; }
+
+  .fields-grid { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
+  .field-card { background: #f9fafb; border-radius: 6px; padding: .6rem .8rem; }
+  .field-key { font-size: .7rem; color: #9ca3af; text-transform: uppercase; letter-spacing: .04em; }
+  .field-val { font-size: .88rem; font-weight: 600; color: #111; margin-top: .1rem; word-break: break-all; }
+  .field-conf { font-size: .7rem; color: #9ca3af; }
+
+  .badges { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: 1rem; }
+  .badge { border-radius: 4px; padding: .2rem .55rem; font-size: .75rem; font-weight: 600; }
+  .badge-green { background: #dcfce7; color: #166534; }
+  .badge-yellow { background: #fef9c3; color: #854d0e; }
+  .badge-red { background: #fee2e2; color: #991b1b; }
+  .badge-blue { background: #dbeafe; color: #1e40af; }
+
+  .warnings-section { margin-top: 1rem; }
+  .warn-title { font-size: .78rem; font-weight: 700; color: #92400e; margin-bottom: .4rem; }
+  .warn-tag { display: inline-block; background: #fef3c7; color: #92400e; border-radius: 3px; padding: .15rem .45rem; font-size: .75rem; margin: .15rem .15rem 0 0; }
+
+  .error-box { background: #fee2e2; border-radius: 8px; padding: 1.25rem; color: #991b1b; }
+  .error-box strong { display: block; margin-bottom: .3rem; }
+
+  /* Summary */
+  .summary-list { list-style: none; }
+  .summary-item { display: flex; align-items: center; gap: .75rem; padding: .6rem 0; border-bottom: 1px solid #f3f4f6; }
+  .summary-item:last-child { border-bottom: none; }
+  .summary-icon { font-size: 1.1rem; }
+  .summary-doc { font-size: .85rem; font-weight: 600; text-transform: capitalize; }
+  .summary-status { margin-left: auto; font-size: .78rem; font-weight: 700; }
+  .status-ok { color: #16a34a; }
+  .status-warn { color: #d97706; }
+
+  .success-banner { text-align: center; padding: 1.5rem 0; }
+  .success-icon { font-size: 3rem; }
+  .success-title { font-size: 1.2rem; font-weight: 700; margin-top: .5rem; color: #16a34a; }
+  .success-sub { font-size: .85rem; color: #6b7280; margin-top: .25rem; }
+
+  details { margin-top: 1rem; }
+  details summary { font-size: .78rem; color: #9ca3af; cursor: pointer; }
+  pre { background: #1e1e1e; color: #d4d4d4; padding: .75rem; border-radius: 6px; font-size: .72rem; overflow-x: auto; margin-top: .4rem; }
+</style>
+</head>
+<body>
+
+<h1>KYC Verification</h1>
+<p class="subtitle">Complete identity verification by uploading your documents</p>
+
+<div class="stepper" id="stepper"></div>
+
+<div class="card" id="card"></div>
+
+<script>
+const API = 'http://localhost:8000';
+
+const STEPS = [
+  { id: 'aadhaar',          label: 'Aadhaar',   icon: '🪪', desc: 'Upload your Aadhaar Card (front side)' },
+  { id: 'pan',              label: 'PAN',        icon: '💳', desc: 'Upload your PAN Card' },
+  { id: 'passport',         label: 'Passport',   icon: '📘', desc: 'Upload your Passport data page' },
+  { id: 'driving_licence',  label: 'DL',         icon: '🚗', desc: 'Upload your Driving Licence (front)' },
+  { id: 'voter_id',         label: 'Voter ID',   icon: '🗳️', desc: 'Upload your Voter ID card' },
+  { id: 'summary',          label: 'Done',       icon: '✅', desc: '' },
+];
+
+// Only require first 2 for a minimal KYC flow; others are optional
+const REQUIRED = ['aadhaar', 'pan'];
+
+let current = 0;
+let results = {}; // stepId → response JSON
+
+// ── Stepper render ──────────────────────────────────────────────────────────
+function renderStepper() {
+  const s = document.getElementById('stepper');
+  s.innerHTML = STEPS.map((step, i) => {
+    const cls = i < current ? 'done' : i === current ? 'active' : '';
+    const inner = i < current ? '✓' : i + 1;
+    return `<div class="step ${cls}">
+      <div class="step-circle">${inner}</div>
+      <div class="step-label">${step.label}</div>
+    </div>`;
+  }).join('');
+}
+
+// ── Card render ─────────────────────────────────────────────────────────────
+function renderCard() {
+  if (current === STEPS.length - 1) { renderSummary(); return; }
+  const step = STEPS[current];
+  const isRequired = REQUIRED.includes(step.id);
+
+  document.getElementById('card').innerHTML = `
+    <div class="step-title">${step.icon} ${step.label} Card</div>
+    <div class="step-desc">${step.desc}${isRequired ? '' : ' <span style="color:#9ca3af">(optional)</span>'}</div>
+
+    <div class="upload-zone" id="zone" onclick="document.getElementById('fileIn').click()"
+         ondragover="event.preventDefault();this.classList.add('drag')"
+         ondragleave="this.classList.remove('drag')"
+         ondrop="handleDrop(event)">
+      <input type="file" id="fileIn" accept=".jpg,.jpeg,.png,.pdf" onchange="fileChosen(this)">
+      <div class="upload-icon">📄</div>
+      <div class="upload-text">Click to upload or drag & drop</div>
+      <div class="upload-hint">JPG, PNG or PDF · max 5 MB</div>
+      <div class="file-selected" id="fileName"></div>
+    </div>
+
+    <div id="resultArea"></div>
+
+    <div class="btn-row">
+      ${current > 0 ? '<button class="btn-secondary" onclick="go(-1)">Back</button>' : ''}
+      ${!isRequired ? `<button class="btn-secondary" onclick="skip()">Skip</button>` : ''}
+      <button class="btn-primary" id="submitBtn" onclick="submit()" disabled>
+        ${isRequired ? 'Verify & Continue' : 'Upload & Continue'}
+      </button>
+    </div>`;
+}
+
+function handleDrop(e) {
+  e.preventDefault();
+  document.getElementById('zone').classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f) setFile(f);
+}
+
+function fileChosen(input) {
+  if (input.files[0]) setFile(input.files[0]);
+}
+
+let chosenFile = null;
+function setFile(f) {
+  chosenFile = f;
+  document.getElementById('fileName').textContent = `📎 ${f.name} (${(f.size/1024).toFixed(0)} KB)`;
+  document.getElementById('submitBtn').disabled = false;
+  document.getElementById('resultArea').innerHTML = '';
+}
+
+// ── Submit ──────────────────────────────────────────────────────────────────
+async function submit() {
+  if (!chosenFile) return;
+  const btn = document.getElementById('submitBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Processing…';
+
+  const form = new FormData();
+  form.append('file', chosenFile);
+
+  try {
+    const resp = await fetch(`${API}/kyc/process`, { method: 'POST', body: form });
+    const data = await resp.json();
+
+    if (data.error) {
+      showError(data);
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+      return;
+    }
+
+    results[STEPS[current].id] = data;
+    showResult(data);
+    btn.innerHTML = 'Continue →';
+    btn.disabled = false;
+    btn.onclick = () => go(1);
+  } catch (e) {
+    showError({ error: 'network_error', message: e.message });
+    btn.disabled = false;
+    btn.textContent = 'Retry';
+    btn.onclick = submit;
+  }
+}
+
+function skip() {
+  results[STEPS[current].id] = null;
+  go(1);
+}
+
+function go(dir) {
+  chosenFile = null;
+  current += dir;
+  renderStepper();
+  renderCard();
+}
+
+// ── Result display ──────────────────────────────────────────────────────────
+function showResult(d) {
+  const pct = Math.round(d.confidence * 100);
+  const confColor = pct >= 80 ? '#16a34a' : pct >= 60 ? '#d97706' : '#dc2626';
+
+  const fieldsHtml = Object.entries(d.fields || {}).map(([k, v]) => {
+    const fc = d.field_confidence?.[k];
+    return `<div class="field-card">
+      <div class="field-key">${k.replace(/_/g,' ')}</div>
+      <div class="field-val">${v ?? '<em style="color:#9ca3af">—</em>'}</div>
+      ${fc != null ? `<div class="field-conf">${Math.round(fc*100)}% confidence</div>` : ''}
+    </div>`;
+  }).join('');
+
+  const badges = [];
+  if (d.masked) badges.push('<span class="badge badge-green">🔒 Aadhaar masked</span>');
+  if (d.mrz_valid === true)  badges.push('<span class="badge badge-green">✓ MRZ valid</span>');
+  if (d.mrz_valid === false) badges.push('<span class="badge badge-red">✗ MRZ invalid</span>');
+
+  const warns = (d.extraction_warnings || []);
+  const warnHtml = warns.length
+    ? `<div class="warnings-section"><div class="warn-title">⚠ Warnings</div>${warns.map(w=>`<span class="warn-tag">${w}</span>`).join('')}</div>`
+    : '';
+
+  document.getElementById('resultArea').innerHTML = `
+    <div style="margin-top:1.25rem">
+      <div class="result-header">
+        <span class="doc-badge">${d.document_type}</span>
+        <div class="conf-bar-wrap">
+          <div class="conf-label">Confidence: <strong style="color:${confColor}">${pct}%</strong></div>
+          <div class="conf-bar"><div class="conf-fill" style="width:${pct}%;background:${confColor}"></div></div>
+        </div>
+      </div>
+      <div class="fields-grid">${fieldsHtml}</div>
+      <div class="badges">${badges.join('')}</div>
+      ${warnHtml}
+      <details><summary>Raw JSON</summary><pre>${JSON.stringify(d,null,2)}</pre></details>
+    </div>`;
+}
+
+function showError(data) {
+  document.getElementById('resultArea').innerHTML = `
+    <div class="error-box" style="margin-top:1rem">
+      <strong>${data.error || 'Error'}</strong>
+      ${data.message || ''}
+      ${data.supported ? `<div style="margin-top:.5rem;font-size:.8rem">Supported: ${data.supported.join(', ')}</div>` : ''}
+    </div>`;
+}
+
+// ── Summary ─────────────────────────────────────────────────────────────────
+function renderSummary() {
+  const docSteps = STEPS.slice(0, -1);
+  const allRequired = REQUIRED.every(id => results[id] && !results[id].error);
+
+  const items = docSteps.map(step => {
+    const r = results[step.id];
+    if (!r) return `<li class="summary-item">
+      <span class="summary-icon">${step.icon}</span>
+      <span class="summary-doc">${step.label}</span>
+      <span class="summary-status" style="color:#9ca3af">Skipped</span>
+    </li>`;
+    const warns = r.extraction_warnings?.length || 0;
+    const pct = Math.round(r.confidence * 100);
+    const statusCls = warns > 0 ? 'status-warn' : 'status-ok';
+    const statusTxt = warns > 0 ? `⚠ ${warns} warning${warns>1?'s':''}` : `✓ ${pct}%`;
+    return `<li class="summary-item">
+      <span class="summary-icon">${step.icon}</span>
+      <span class="summary-doc">${step.label}</span>
+      <span class="summary-status ${statusCls}">${statusTxt}</span>
+    </li>`;
+  }).join('');
+
+  document.getElementById('card').innerHTML = allRequired
+    ? `<div class="success-banner">
+        <div class="success-icon">🎉</div>
+        <div class="success-title">KYC Verification Complete</div>
+        <div class="success-sub">All required documents verified successfully</div>
+      </div>
+      <ul class="summary-list">${items}</ul>
+      <div class="btn-row"><button class="btn-secondary" onclick="restart()">Start Over</button></div>`
+    : `<div class="error-box" style="margin-bottom:1rem">
+        <strong>Verification Incomplete</strong>
+        Aadhaar and PAN are required to complete KYC.
+      </div>
+      <ul class="summary-list">${items}</ul>
+      <div class="btn-row"><button class="btn-secondary" onclick="restart()">Start Over</button></div>`;
+}
+
+function restart() {
+  current = 0; results = {}; chosenFile = null;
+  renderStepper(); renderCard();
+}
+
+// ── Init ────────────────────────────────────────────────────────────────────
+renderStepper();
+renderCard();
+</script>
+</body>
+</html>

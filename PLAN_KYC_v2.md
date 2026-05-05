@@ -147,12 +147,10 @@ For multi-page PDFs, the pipeline should:
 This layer runs on every image input before MinerU. It is the primary defense against degraded scan quality.
 
 ### Operations in order
-1. Deskew — detect and correct document rotation and perspective distortion
-2. Denoise — reduce noise from low-quality scans
-3. Resolution check — if image is below a usable DPI threshold, apply upscaling
-4. Contrast enhancement — improve readability of faded or poorly lit documents
-5. Border detection — optionally crop to document boundaries if background is present
-6. Compress for Groq — produce a separate JPEG copy at quality 85, resized to max 2000px on longest side, targeting ≤3.5MB. This copy is sent to Groq. MinerU receives the full-quality preprocessed image from step 5.
+1. Contrast enhancement — CLAHE on the L channel (LAB space) to improve readability of faded scans
+2. Compress for Groq — produce a JPEG copy at quality 85, resized to max 2000px on longest side, targeting ≤3.5MB. This copy is sent to Groq. MinerU receives the full-quality contrast-enhanced image.
+
+Deskew, denoise, and upscaling are intentionally omitted. The input is capped at 5MB scanned documents, which are already reasonably aligned and resolved. Those operations add latency and complexity without meaningful benefit for this input profile.
 
 ### Output
 Two images are produced:
