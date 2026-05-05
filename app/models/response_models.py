@@ -2,6 +2,13 @@ from typing import Any
 from pydantic import BaseModel
 
 
+class ConsistencyReport(BaseModel):
+    consistent: bool
+    checked_against: list[str]
+    mismatches: list[dict]
+    reliability: float
+
+
 class KYCResponse(BaseModel):
     document_type: str
     confidence: float
@@ -9,7 +16,8 @@ class KYCResponse(BaseModel):
     field_confidence: dict[str, float]
     masked: bool
     extraction_warnings: list[str]
-    mrz_valid: bool | None = None  # passport only
+    mrz_valid: bool | None = None
+    consistency_report: ConsistencyReport | None = None
 
 
 class ErrorResponse(BaseModel):

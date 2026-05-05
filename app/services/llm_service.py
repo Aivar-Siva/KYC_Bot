@@ -127,7 +127,191 @@ def _call_bedrock(mineru_text: str) -> dict:
         raise ValueError("Bedrock response contained no valid JSON")
 
 
+_DOC_SIGNATURES = {
+    "aadhaar": (
+        "Aadhaar card. Key markers: 'Unique Identification Authority of India' or 'UIDAI' or 'आधार', "
+        "a 12-digit Aadhaar number (printed as XXXX XXXX XXXX), name, DOB, gender, address. "
+        "May include Hindi text. The 12-digit number is the strongest signal."
+    ),
+    "pan": (
+        "PAN card. Key markers: 'Income Tax Department' or 'Permanent Account Number', "
+        "a 10-character PAN number in format AAAAA9999A (5 letters, 4 digits, 1 letter), "
+        "name, father's name, DOB. Issued by Government of India."
+    ),
+    "passport": (
+        "Indian Passport. Key markers: 'Republic of India', 'Passport' or 'पासपोर्ट', "
+        "a passport number in format A9999999 (1 letter + 7 digits), "
+        "MRZ lines at the bottom (two lines of 44 characters with '<' separators, starting with P<IND), "
+        "nationality 'INDIAN', place of birth, date of issue/expiry. "
+        "The MRZ lines and passport number format are the strongest signals — look for them even if the image is rotated."
+    ),
+    "voter_id": (
+        "Voter ID / EPIC card. Key markers: 'Election Commission of India', 'EPIC No' or 'Voter ID', "
+        "an EPIC number (alphanumeric, typically 3 letters + 7 digits), "
+        "name, father's/husband's name, constituency, assembly segment. "
+        "Layout and language vary by state."
+    ),
+    "driving_licence": (
+        "Driving Licence. Key markers: 'Driving Licence' or 'DL No', state RTO name, "
+        "a DL number in format SS-RR-YYYY-NNNNNNN (state code + RTO + year + number), "
+        "vehicle classes (LMV, MCWG, etc.), validity dates, blood group. "
+        "Issued by state Transport Department."
+    ),
+}
+
+
+def gate_document_type(expected_type: str, groq_image_bytes: bytes) -> tuple[bool, str]:
+    """
+    Layer 1: Content-based document type gate.
+    Uses textual markers and content signatures, not visual layout, so rotation doesn't matter.
+    Returns (is_correct_type, reason).
+    """
+    if _groq_client is None:
+        return True, "Groq unavailable, gate skipped"
+    try:
+        signature = _DOC_SIGNATURES.get(expected_type, expected_type)
+        resp = _groq_client.chat.completions.create(
+            model=settings.groq_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a KYC document classifier for Indian identity documents. "
+                        "Identify documents by their TEXT CONTENT and printed labels — not by orientation or layout. "
+                        "A rotated or upside-down document still contains the same text. "
+                        "Return only valid JSON: {\"is_correct_type\": true/false, \"reason\": \"one sentence citing specific text you found or did not find\"}."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": (
+                                f"I need to verify this is a {expected_type}.\n\n"
+                                f"A genuine {expected_type} contains these specific markers:\n{signature}\n\n"
+                                f"Look at the image carefully — read all visible text regardless of orientation. "
+                                f"Do you find these markers in this document? "
+                                f"Cite the specific text you found or could not find in your reason."
+                            ),
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(groq_image_bytes).decode()}"},
+                        },
+                    ],
+                },
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=150,
+            timeout=20.0,
+        )
+        result = json.loads(resp.choices[0].message.content)
+        return bool(result.get("is_correct_type", False)), str(result.get("reason", ""))
+    except Exception as exc:
+        logger.warning("Layer 1 gate failed (non-blocking): %s", exc)
+        return True, "gate check unavailable"
+
+
 def extract(mineru_text: str, groq_image_bytes: bytes) -> tuple[dict, list[str]]:
+    """
+    Call Groq primary; fall back to Bedrock on failure.
+    Returns (llm_output_dict, extra_warnings).
+    """
+    extra_warnings: list[str] = []
+    try:
+        result = _call_groq(mineru_text, groq_image_bytes)
+        return result, extra_warnings
+    except Exception as groq_exc:
+        logger.warning("Groq failed, switching to Bedrock fallback: %s", groq_exc)
+        extra_warnings.append("vision_unavailable")
+    try:
+        result = _call_bedrock(mineru_text)
+        return result, extra_warnings
+    except Exception as bedrock_exc:
+        logger.error("Bedrock fallback also failed: %s", bedrock_exc)
+        raise RuntimeError("processing_error") from bedrock_exc
+
+
+_VERIFY_PROMPT = """You are a strict KYC fraud detection officer reviewing Indian identity documents.
+
+You will receive:
+1. A document image
+2. The REQUIRED document type (what the user is supposed to upload)
+3. Fields extracted from the image
+
+Your task: determine if this submission is valid. Apply these checks IN ORDER and stop at the first failure.
+
+CHECK 1 — CORRECT DOCUMENT TYPE (HARD FAIL):
+Is the document in the image actually a {expected_type}?
+- Look at the physical layout, header text, logos, and format of the document
+- A PAN card is NOT an Aadhaar card. A Voter ID is NOT a Passport. Be precise.
+- If the document in the image is NOT a {expected_type}, set overall_pass=false immediately.
+- Do not be fooled by similar-looking documents. Each Indian ID has distinct visual markers.
+
+CHECK 2 — FIELD ACCURACY (HARD FAIL):
+Do the extracted field values exactly match what is printed/visible on the document?
+- Compare each field value against what you can read in the image
+- If a field value is not visible on the document or contradicts what is shown, fail this check
+
+CHECK 3 — DATA INTEGRITY:
+Does the data make sense as a real person's document?
+- Impossible DOB (future date, age > 120): fail
+- ID number format doesn't match what's visible: fail
+
+Return ONLY this JSON with no explanation outside it:
+{{
+  "authentic": true or false,
+  "correct_document_type": true or false,
+  "fields_match": true or false,
+  "data_integrity": true or false,
+  "overall_pass": true or false,
+  "reasoning": "one sentence — be specific about what failed",
+  "failed_checks": ["specific issue 1", "specific issue 2"]
+}}
+
+overall_pass = true ONLY if ALL checks pass. Be strict. A PAN card submitted for Aadhaar verification MUST fail."""
+
+
+def verify_document(fields: dict, doc_type: str, groq_image_bytes: bytes, expected_type: str | None = None) -> tuple[bool, str, list[str]]:
+    """
+    Fraud reasoning pass. expected_type is what the user is supposed to be submitting.
+    Returns (passed, reasoning, failed_checks).
+    """
+    if _groq_client is None:
+        return True, "", []
+    try:
+        required_type = expected_type or doc_type
+        prompt = _VERIFY_PROMPT.replace("{expected_type}", required_type)
+        fields_text = "\n".join(f"  {k}: {v}" for k, v in fields.items())
+        user_content = [
+            {
+                "type": "text",
+                "text": f"Required document type: {required_type}\nExtracted fields:\n{fields_text}\n\nAnalyse the document image and return your fraud assessment JSON."
+            },
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(groq_image_bytes).decode()}"}
+            },
+        ]
+        resp = _groq_client.chat.completions.create(
+            model=settings.groq_model,
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": user_content},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=512,
+            timeout=25.0,
+        )
+        result = json.loads(resp.choices[0].message.content)
+        passed = bool(result.get("overall_pass", True))
+        reasoning = str(result.get("reasoning", ""))
+        failed_checks = list(result.get("failed_checks", []))
+        return passed, reasoning, failed_checks
+    except Exception as exc:
+        logger.warning("Document verification failed (non-blocking): %s", exc)
+        return True, "", []
     """
     Call Groq primary; fall back to Bedrock on failure.
     Returns (llm_output_dict, extra_warnings).

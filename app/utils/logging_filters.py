@@ -19,5 +19,9 @@ def _redact(text: str) -> str:
 class PIIRedactionFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         record.msg = _redact(str(record.msg))
-        record.args = tuple(_redact(str(a)) for a in record.args) if record.args else record.args
+        if record.args:
+            record.args = tuple(
+                _redact(a) if isinstance(a, str) else a
+                for a in (record.args if isinstance(record.args, tuple) else (record.args,))
+            )
         return True

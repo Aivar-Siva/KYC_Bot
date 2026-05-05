@@ -102,6 +102,12 @@
 <h1>KYC Verification</h1>
 <p class="subtitle">Complete identity verification by uploading your documents</p>
 
+<div class="card" style="max-width:640px;margin-bottom:1rem">
+  <label for="uploaderInput" style="font-size:.875rem;font-weight:600;display:block;margin-bottom:.4rem">Your Name / Applicant ID</label>
+  <input type="text" id="uploaderInput" placeholder="e.g. priya_sharma or APP-001"
+    style="width:100%;padding:.5rem .75rem;border:1px solid #d1d5db;border-radius:6px;font-size:.9rem">
+</div>
+
 <div class="stepper" id="stepper"></div>
 
 <div class="card" id="card"></div>
@@ -191,12 +197,19 @@ function setFile(f) {
 // ── Submit ──────────────────────────────────────────────────────────────────
 async function submit() {
   if (!chosenFile) return;
+  const uploaderName = document.getElementById('uploaderInput').value.trim();
+  if (!uploaderName) {
+    document.getElementById('status').textContent = 'Please enter your name or applicant ID first.';
+    return;
+  }
   const btn = document.getElementById('submitBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Processing…';
 
   const form = new FormData();
   form.append('file', chosenFile);
+  form.append('expected_type', STEPS[current].id);
+  form.append('uploader_name', uploaderName);
 
   try {
     const resp = await fetch(`${API}/kyc/process`, { method: 'POST', body: form });
@@ -211,7 +224,7 @@ async function submit() {
 
     results[STEPS[current].id] = data;
     showResult(data);
-    btn.innerHTML = 'Continue →';
+    btn.innerHTML = `Next: ${current + 1 < STEPS.length - 1 ? STEPS[current + 1].label : 'Summary'} →`;
     btn.disabled = false;
     btn.onclick = () => go(1);
   } catch (e) {
@@ -231,7 +244,13 @@ function go(dir) {
   chosenFile = null;
   current += dir;
   renderStepper();
-  renderCard();
+  const card = document.getElementById('card');
+  card.style.opacity = '0';
+  card.style.transition = 'opacity 0.15s';
+  setTimeout(() => {
+    renderCard();
+    card.style.opacity = '1';
+  }, 150);
 }
 
 // ── Result display ──────────────────────────────────────────────────────────
@@ -258,6 +277,28 @@ function showResult(d) {
     ? `<div class="warnings-section"><div class="warn-title">⚠ Warnings</div>${warns.map(w=>`<span class="warn-tag">${w}</span>`).join('')}</div>`
     : '';
 
+  // Consistency report
+  const cr = d.consistency_report;
+  let consistencyHtml = '';
+  if (cr && cr.checked_against.length > 0) {
+    const reliabilityPct = Math.round(cr.reliability * 100);
+    const reliabilityColor = reliabilityPct === 100 ? '#16a34a' : reliabilityPct >= 50 ? '#d97706' : '#dc2626';
+    const mismatchRows = cr.mismatches.map(m =>
+      `<li style="font-size:.8rem;margin-top:.25rem">
+        <strong>${m.field}</strong>: this doc says "<em>${m.value}</em>" but ${m.in_stored} says "<em>${m.stored_value}</em>"
+      </li>`
+    ).join('');
+    consistencyHtml = `
+      <div style="margin-top:1rem;padding:.75rem;background:${cr.consistent?'#f0fdf4':'#fff7ed'};border-radius:6px;border:1px solid ${cr.consistent?'#bbf7d0':'#fed7aa'}">
+        <div style="font-size:.82rem;font-weight:700;color:${cr.consistent?'#166534':'#9a3412'}">
+          ${cr.consistent ? '✓ Person consistency verified' : '⚠ Person consistency mismatch'}
+          <span style="float:right;color:${reliabilityColor}">Reliability: ${reliabilityPct}%</span>
+        </div>
+        <div style="font-size:.75rem;color:#6b7280;margin-top:.2rem">Checked against: ${cr.checked_against.join(', ')}</div>
+        ${mismatchRows ? `<ul style="padding-left:1rem;margin-top:.4rem">${mismatchRows}</ul>` : ''}
+      </div>`;
+  }
+
   document.getElementById('resultArea').innerHTML = `
     <div style="margin-top:1.25rem">
       <div class="result-header">
@@ -270,16 +311,20 @@ function showResult(d) {
       <div class="fields-grid">${fieldsHtml}</div>
       <div class="badges">${badges.join('')}</div>
       ${warnHtml}
+      ${consistencyHtml}
       <details><summary>Raw JSON</summary><pre>${JSON.stringify(d,null,2)}</pre></details>
     </div>`;
 }
 
 function showError(data) {
+  const checks = data.supported?.length
+    ? `<ul style="margin-top:.5rem;padding-left:1.2rem;font-size:.82rem">${data.supported.map(c=>`<li>${c}</li>`).join('')}</ul>`
+    : '';
   document.getElementById('resultArea').innerHTML = `
     <div class="error-box" style="margin-top:1rem">
-      <strong>${data.error || 'Error'}</strong>
-      ${data.message || ''}
-      ${data.supported ? `<div style="margin-top:.5rem;font-size:.8rem">Supported: ${data.supported.join(', ')}</div>` : ''}
+      <strong>${(data.error||'Error').replace(/_/g,' ')}</strong>
+      <div style="margin-top:.25rem">${data.message || ''}</div>
+      ${checks}
     </div>`;
 }
 
@@ -287,6 +332,22 @@ function showError(data) {
 function renderSummary() {
   const docSteps = STEPS.slice(0, -1);
   const allRequired = REQUIRED.every(id => results[id] && !results[id].error);
+
+  // Cross-document consistency check
+  const submitted = docSteps.filter(s => results[s.id]);
+  const names = submitted.map(s => results[s.id]?.fields?.name).filter(Boolean);
+  const dobs  = submitted.map(s => results[s.id]?.fields?.dob).filter(Boolean);
+  const normalize = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const namesMatch = names.length < 2 || names.every(n => normalize(n) === normalize(names[0]));
+  const dobsMatch  = dobs.length  < 2 || dobs.every(d => d === dobs[0]);
+  const crossOk = namesMatch && dobsMatch;
+
+  const crossWarning = !crossOk ? `
+    <div class="error-box" style="margin-bottom:1rem">
+      <strong>⚠ Cross-document mismatch detected</strong>
+      ${!namesMatch ? `<div>Names don't match across documents: ${names.join(' / ')}</div>` : ''}
+      ${!dobsMatch  ? `<div>Date of birth doesn't match across documents: ${dobs.join(' / ')}</div>` : ''}
+    </div>` : '';
 
   const items = docSteps.map(step => {
     const r = results[step.id];
@@ -306,7 +367,7 @@ function renderSummary() {
     </li>`;
   }).join('');
 
-  document.getElementById('card').innerHTML = allRequired
+  document.getElementById('card').innerHTML = allRequired && crossOk
     ? `<div class="success-banner">
         <div class="success-icon">🎉</div>
         <div class="success-title">KYC Verification Complete</div>
@@ -314,10 +375,8 @@ function renderSummary() {
       </div>
       <ul class="summary-list">${items}</ul>
       <div class="btn-row"><button class="btn-secondary" onclick="restart()">Start Over</button></div>`
-    : `<div class="error-box" style="margin-bottom:1rem">
-        <strong>Verification Incomplete</strong>
-        Aadhaar and PAN are required to complete KYC.
-      </div>
+    : `${crossWarning}
+      ${!allRequired ? `<div class="error-box" style="margin-bottom:1rem"><strong>Verification Incomplete</strong> Aadhaar and PAN are required.</div>` : ''}
       <ul class="summary-list">${items}</ul>
       <div class="btn-row"><button class="btn-secondary" onclick="restart()">Start Over</button></div>`;
 }
