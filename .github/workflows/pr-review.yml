@@ -1,0 +1,11 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    uses: Aivar-Siva/code-review-Agent/.github/workflows/pr-review-reusable.yml@main
+    secrets:
+      BEDROCK_PROXY_URL: ${{ secrets.BEDROCK_PROXY_URL }}
